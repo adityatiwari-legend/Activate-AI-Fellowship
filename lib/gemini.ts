@@ -120,28 +120,45 @@ async function fetchAvailableGenerateModels(apiKey: string): Promise<string[]> {
 }
 
 function parseModelJson(content: string): AnalysisResult {
-  const firstBrace = content.indexOf("{");
-  const lastBrace = content.lastIndexOf("}");
-  if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
-    throw new Error("Model did not return valid JSON.");
+  const trimmed = content.trim();
+  const candidates: string[] = [];
+
+  if (trimmed) {
+    candidates.push(trimmed);
   }
 
-  const rawJson = content.slice(firstBrace, lastBrace + 1);
-  const parsed = JSON.parse(rawJson) as Partial<AnalysisResult>;
-
-  if (
-    typeof parsed.failure_point !== "string" ||
-    typeof parsed.diagnosis !== "string" ||
-    typeof parsed.revival_message !== "string"
-  ) {
-    throw new Error("Model response schema is invalid.");
+  const codeBlockMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (codeBlockMatch?.[1]) {
+    candidates.push(codeBlockMatch[1].trim());
   }
 
-  return {
-    failure_point: parsed.failure_point.trim(),
-    diagnosis: parsed.diagnosis.trim(),
-    revival_message: parsed.revival_message.trim()
-  };
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    candidates.push(trimmed.slice(firstBrace, lastBrace + 1));
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as Partial<AnalysisResult>;
+
+      if (
+        typeof parsed.failure_point === "string" &&
+        typeof parsed.diagnosis === "string" &&
+        typeof parsed.revival_message === "string"
+      ) {
+        return {
+          failure_point: parsed.failure_point.trim(),
+          diagnosis: parsed.diagnosis.trim(),
+          revival_message: parsed.revival_message.trim()
+        };
+      }
+    } catch {
+      // Try the next candidate.
+    }
+  }
+
+  throw new Error("Model did not return valid JSON.");
 }
 
 export async function analyzeConversation(input: {
@@ -206,9 +223,18 @@ Return only JSON with keys failure_point, diagnosis, revival_message.`;
             }
           ],
           generationConfig: {
-            temperature: 0.8,
+            temperature: 0.3,
             maxOutputTokens: 1000,
-            responseMimeType: "application/json"
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: "object",
+              properties: {
+                failure_point: { type: "string" },
+                diagnosis: { type: "string" },
+                revival_message: { type: "string" }
+              },
+              required: ["failure_point", "diagnosis", "revival_message"]
+            }
           }
         }),
         cache: "no-store"
